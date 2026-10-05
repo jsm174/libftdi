@@ -759,11 +759,15 @@ int ftdi_usb_open_desc(struct ftdi_context *ftdi, int vendor, int product,
     \param serial Serial to search for. Use NULL if not needed.
     \param index Number of matching device to open if there are more than one, starts with 0.
 
+    \note When description or serial is given, devices that cannot be opened
+          (LIBUSB_ERROR_ACCESS or LIBUSB_ERROR_BUSY) are skipped, since their
+          strings cannot be inspected.
+
     \retval  0: all fine
     \retval -1: usb_find_busses() failed
     \retval -2: usb_find_devices() failed
     \retval -3: usb device not found
-    \retval -4: unable to open device
+    \retval -4: unable to open device, or device not found while some devices were inaccessible
     \retval -5: unable to claim device
     \retval -6: reset failed
     \retval -7: set baudrate failed
@@ -780,6 +784,8 @@ int ftdi_usb_open_desc_index(struct ftdi_context *ftdi, int vendor, int product,
     libusb_device **devs;
     char string[256];
     int i = 0;
+    int inaccessible_device = 0;
+    int filtered_search = description != NULL || serial != NULL;
 
     if (ftdi == NULL)
         ftdi_error_return(-11, "ftdi context invalid");
@@ -797,8 +803,16 @@ int ftdi_usb_open_desc_index(struct ftdi_context *ftdi, int vendor, int product,
 
         if (desc.idVendor == vendor && desc.idProduct == product)
         {
-            if (libusb_open(dev, &ftdi->usb_dev) < 0)
+            res = libusb_open(dev, &ftdi->usb_dev);
+            if (res < 0)
+            {
+                if (filtered_search && (res == LIBUSB_ERROR_ACCESS || res == LIBUSB_ERROR_BUSY))
+                {
+                    inaccessible_device = 1;
+                    continue;
+                }
                 ftdi_error_return_free_device_list(-4, "usb_open() failed", devs);
+            }
 
             if (description != NULL)
             {
@@ -840,6 +854,9 @@ int ftdi_usb_open_desc_index(struct ftdi_context *ftdi, int vendor, int product,
             return res;
         }
     }
+
+    if (inaccessible_device)
+        ftdi_error_return_free_device_list(-4, "device not found, some devices were inaccessible", devs);
 
     // device not found
     ftdi_error_return_free_device_list(-3, "device not found", devs);
